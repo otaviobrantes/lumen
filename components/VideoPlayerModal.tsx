@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { X, Play, Pause, Volume2, Maximize, SkipForward, SkipBack, Lock, CreditCard } from 'lucide-react';
+import { X, Lock, CreditCard } from 'lucide-react';
 import { Video } from '../types';
 import { Link } from 'react-router-dom';
 
@@ -12,7 +12,28 @@ interface VideoPlayerModalProps {
 export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClose }) => {
   if (!video) return null;
 
-  const isEmbed = video.videoUrl.includes('embed');
+  // Função robusta para extrair o ID do YouTube de qualquer formato de link
+  const getYouTubeEmbedUrl = (url: string) => {
+      // Tenta pegar o ID de vários formatos:
+      // - youtube.com/watch?v=ID
+      // - youtube.com/embed/ID
+      // - youtu.be/ID
+      const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+      const match = url.match(regExp);
+
+      const videoId = (match && match[2].length === 11) ? match[2] : null;
+
+      if (videoId) {
+          return `https://www.youtube.com/embed/${videoId}?autoplay=1&modestbranding=1&rel=0`;
+      }
+      
+      // Fallback: se já for um embed válido, retorna ele limpo, se não, tenta retornar original
+      return url.includes('embed') ? url : url; 
+  };
+
+  // Detecção inteligente do tipo de vídeo
+  const isYouTube = video.videoUrl.includes('youtube.com') || video.videoUrl.includes('youtu.be');
+  const embedUrl = isYouTube ? getYouTubeEmbedUrl(video.videoUrl) : video.videoUrl;
   
   // Check Auth & Subscription
   const userString = localStorage.getItem('lumen_user');
@@ -33,7 +54,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
       </button>
 
       {/* Player Container */}
-      <div className="w-full max-w-6xl aspect-video bg-black relative shadow-2xl rounded-lg overflow-hidden">
+      <div className="w-full max-w-6xl aspect-video bg-black relative shadow-2xl rounded-lg overflow-hidden border border-slate-800">
         
         {isLocked ? (
              // LOCKED SCREEN (Paywall)
@@ -61,60 +82,27 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
                 </div>
              </div>
         ) : (
-            // UNLOCKED PLAYER
+            // UNLOCKED PLAYER (Real Playback)
             <>
-                {isEmbed ? (
+                {isYouTube ? (
                     <iframe 
-                        src={`${video.videoUrl}?autoplay=1&rel=0&modestbranding=1`} 
+                        src={embedUrl}
                         title={video.title}
                         className="w-full h-full border-0"
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                         allowFullScreen
                     />
                 ) : (
-                    // Fallback Player UI
-                    <div className="w-full h-full bg-slate-900 relative group cursor-none hover:cursor-default overflow-hidden">
-                        <img src={video.thumbnailUrl} className="w-full h-full object-cover opacity-50" alt="Video Content" />
-                        
-                        <div className="absolute inset-0 flex items-center justify-center">
-                            <h3 className="text-2xl text-white font-light">Simulando Stream: {video.title}</h3>
-                        </div>
-
-                        {/* Controls Overlay */}
-                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-6 transform translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out">
-                        
-                        {/* Progress Bar */}
-                        <div className="w-full h-1.5 bg-gray-600 rounded-full mb-4 cursor-pointer group/progress">
-                            <div className="w-1/3 h-full bg-amber-500 relative">
-                                <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full opacity-0 group-hover/progress:opacity-100 transform scale-0 group-hover/progress:scale-100 transition-all"></div>
-                            </div>
-                        </div>
-
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-6">
-                            <button className="text-white hover:text-amber-400"><Play className="w-8 h-8 fill-current" /></button>
-                            <button className="text-gray-300 hover:text-white"><SkipBack className="w-6 h-6" /> 10s</button>
-                            <button className="text-gray-300 hover:text-white"><SkipForward className="w-6 h-6" /> 10s</button>
-                            <div className="flex items-center space-x-2 text-gray-300 group/vol">
-                                <Volume2 className="w-6 h-6" />
-                                <div className="w-0 overflow-hidden group-hover/vol:w-24 transition-all duration-300">
-                                    <div className="h-1 bg-gray-500 rounded-full w-20 ml-2"><div className="w-3/4 h-full bg-white"></div></div>
-                                </div>
-                            </div>
-                            <span className="text-sm text-gray-300 font-mono">12:34 / {video.duration}</span>
-                            </div>
-
-                            <div>
-                                <h4 className="text-white font-bold text-lg">{video.title}</h4>
-                            </div>
-
-                            <div className="flex items-center space-x-4">
-                                <button className="text-gray-300 hover:text-white font-semibold border border-gray-500 rounded px-2 py-0.5 text-xs uppercase">CC</button>
-                                <button className="text-gray-300 hover:text-white"><Maximize className="w-6 h-6" /></button>
-                            </div>
-                        </div>
-                        </div>
-                    </div>
+                    // Native HTML5 Player for Supabase Uploads (MP4)
+                    <video 
+                        controls 
+                        autoPlay 
+                        className="w-full h-full bg-black"
+                        poster={video.thumbnailUrl}
+                    >
+                        <source src={video.videoUrl} type="video/mp4" />
+                        Seu navegador não suporta a reprodução deste vídeo.
+                    </video>
                 )}
             </>
         )}

@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Navbar } from '../components/Navbar';
-import { Users, PlayCircle, HardDrive, Upload, Link as LinkIcon, Settings, BarChart3, Trash2, X, Loader, CheckCircle, AlertTriangle, Wifi, WifiOff, FileVideo, Image as ImageIcon, Wand2, RefreshCw, User as UserIcon, Shield, Search } from 'lucide-react';
+import { Users, PlayCircle, HardDrive, Upload, Link as LinkIcon, Settings, BarChart3, Trash2, X, Loader, CheckCircle, AlertTriangle, Wifi, WifiOff, FileVideo, Image as ImageIcon, Wand2, RefreshCw, User as UserIcon, Shield, Search, AlertCircle, Edit } from 'lucide-react';
 import { supabase, uploadFile } from '../services/supabase';
 import { Video } from '../types';
 
@@ -18,6 +18,15 @@ export const AdminDashboard: React.FC = () => {
       recentVideos: [] as any[]
   });
   
+  // Delete Modal State
+  const [videoToDelete, setVideoToDelete] = useState<{id: string, title: string} | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Edit State
+  const [editingVideoId, setEditingVideoId] = useState<string | null>(null);
+  const [existingThumbnailUrl, setExistingThumbnailUrl] = useState<string>('');
+  const [existingVideoUrl, setExistingVideoUrl] = useState<string>('');
+
   // Team Management State
   const [userList, setUserList] = useState<any[]>([]);
   const [userSearch, setUserSearch] = useState('');
@@ -200,39 +209,155 @@ export const AdminDashboard: React.FC = () => {
       }
   };
 
+  const resetForm = () => {
+      setTitle('');
+      setDescription('');
+      setCategory('Histórias Bíblicas');
+      setYoutubeLink('');
+      setVideoFile(null);
+      setThumbnailFile(null);
+      setGeneratedThumbPreview(null);
+      setDuration('');
+      setIsPremium(false);
+      setUploadType('link');
+      
+      // Edit Reset
+      setEditingVideoId(null);
+      setExistingThumbnailUrl('');
+      setExistingVideoUrl('');
+  };
+
+  const handleEditVideo = (video: any) => {
+      setTitle(video.title);
+      setDescription(video.description || '');
+      setCategory(video.category || 'Histórias Bíblicas');
+      setDuration(video.duration || '');
+      setIsPremium(video.is_premium || false);
+      
+      setExistingThumbnailUrl(video.thumbnail_url);
+      setExistingVideoUrl(video.video_url);
+      setEditingVideoId(video.id);
+
+      // Determine type based on URL
+      if (video.video_url.includes('youtube') || video.video_url.includes('youtu.be')) {
+          setUploadType('link');
+          setYoutubeLink(video.video_url);
+      } else {
+          setUploadType('file');
+          // We can't set the file object from URL, but we know it exists
+      }
+      
+      setIsUploadModalOpen(true);
+  };
+
+  // Abre o modal de confirmação
+  const confirmDeleteVideo = (videoId: string, videoTitle: string) => {
+      setVideoToDelete({ id: videoId, title: videoTitle });
+  };
+
+  // Executa a exclusão real
+  const handleExecuteDelete = async () => {
+      if (!videoToDelete) return;
+
+      setIsDeleting(true);
+      try {
+          // Usamos .select() para garantir que o banco confirme a exclusão do registro
+          const { data, error } = await supabase
+            .from('videos')
+            .delete()
+            .eq('id', videoToDelete.id)
+            .select();
+
+          if (error) throw error;
+          
+          // Se o RLS bloquear silenciosamente, data será vazio
+          if (!data || data.length === 0) {
+             throw new Error("O banco de dados não permitiu a exclusão (Verifique as Políticas RLS).");
+          }
+          
+          setVideoToDelete(null); // Fecha o modal
+          checkConnectionAndFetchData(); // Atualiza a lista
+      } catch (error: any) {
+          console.error("Erro ao excluir:", error);
+          alert(`Erro ao excluir: ${error.message}`);
+          setVideoToDelete(null);
+      } finally {
+          setIsDeleting(false);
+      }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
       e.preventDefault();
       if (!title || !category) { alert("Preencha título e categoria."); return; }
-      if (!thumbnailFile && !generatedThumbPreview) { alert("Capa obrigatória."); return; }
+      
+      // Validation for NEW uploads: Thumbnail mandatory
+      // Validation for EDITS: Thumbnail optional (keeps old one)
+      if (!editingVideoId && !thumbnailFile && !generatedThumbPreview) { alert("Capa obrigatória."); return; }
 
       setUploading(true);
       try {
           const { data: { user } } = await supabase.auth.getUser();
-          let finalThumbnailUrl = '';
-          if (thumbnailFile) finalThumbnailUrl = await uploadFile(thumbnailFile, 'thumbnails');
-          else if (generatedThumbPreview) finalThumbnailUrl = generatedThumbPreview;
+          
+          // 1. Upload da Thumbnail (se houver novo)
+          let finalThumbnailUrl = existingThumbnailUrl;
+          if (thumbnailFile) {
+              finalThumbnailUrl = await uploadFile(thumbnailFile, 'thumbnails');
+          } else if (generatedThumbPreview) {
+              finalThumbnailUrl = generatedThumbPreview;
+          }
 
-          let finalVideoUrl = '';
-          if (uploadType === 'file') finalVideoUrl = await uploadFile(videoFile!, 'videos');
-          else {
+          // 2. Upload do Vídeo (se houver novo)
+          let finalVideoUrl = existingVideoUrl;
+          
+          // Only process video if logic changes
+          if (uploadType === 'link') {
               let videoId = '';
               if (youtubeLink.includes('v=')) videoId = youtubeLink.split('v=')[1].split('&')[0];
               else if (youtubeLink.includes('youtu.be/')) videoId = youtubeLink.split('youtu.be/')[1];
-              finalVideoUrl = videoId ? `https://www.youtube.com/embed/${videoId}` : youtubeLink;
+              else if (youtubeLink.includes('embed/')) videoId = youtubeLink.split('embed/')[1].split('?')[0];
+              
+              if (videoId) {
+                  finalVideoUrl = `https://www.youtube.com/embed/${videoId}`;
+              } else if (youtubeLink) {
+                  finalVideoUrl = youtubeLink; 
+              }
+          } else if (uploadType === 'file' && videoFile) {
+               // Only upload new file if selected
+               finalVideoUrl = await uploadFile(videoFile, 'videos');
           }
 
           const payload: any = {
-              title, description, category, video_url: finalVideoUrl, thumbnail_url: finalThumbnailUrl,
-              duration: duration || 'Unknown', is_premium: isPremium
+              title, 
+              description, 
+              category, 
+              video_url: finalVideoUrl, 
+              thumbnail_url: finalThumbnailUrl,
+              duration: duration || 'Unknown', 
+              is_premium: isPremium
           };
-          if (user?.id) payload.user_id = user.id;
 
-          const { error } = await supabase.from('videos').insert(payload);
+          let error;
+          if (editingVideoId) {
+              // UPDATE
+              const { error: updateError } = await supabase
+                .from('videos')
+                .update(payload)
+                .eq('id', editingVideoId);
+              error = updateError;
+          } else {
+              // INSERT
+              if (user?.id) payload.user_id = user.id;
+              const { error: insertError } = await supabase
+                .from('videos')
+                .insert(payload);
+              error = insertError;
+          }
+
           if (error) throw error;
 
-          setTitle(''); setDescription(''); setYoutubeLink(''); setVideoFile(null); 
-          setThumbnailFile(null); setGeneratedThumbPreview(null); setIsUploadModalOpen(false);
-          alert("Vídeo salvo!");
+          resetForm();
+          setIsUploadModalOpen(false);
+          alert(editingVideoId ? "Vídeo atualizado!" : "Vídeo salvo!");
           checkConnectionAndFetchData();
 
       } catch (err: any) {
@@ -248,19 +373,26 @@ export const AdminDashboard: React.FC = () => {
   const handleUpdateRole = async (userId: string, newRole: 'USER' | 'ADMIN' | 'EDITOR') => {
       setRoleUpdating(userId);
       try {
-          const { error } = await supabase
+          // Usamos .select() para confirmar se o registro foi REALMENTE alterado
+          const { data, error } = await supabase
             .from('profiles')
             .update({ role: newRole })
-            .eq('id', userId);
+            .eq('id', userId)
+            .select();
           
           if (error) throw error;
+
+          // Se o array data estiver vazio, significa que a Policy (RLS) bloqueou o update silenciosamente
+          if (!data || data.length === 0) {
+              throw new Error("Banco de dados recusou a alteração. Verifique se você é ADMIN no Supabase (tabela profiles).");
+          }
           
           // Update local list
           setUserList(prev => prev.map(u => u.id === userId ? { ...u, role: newRole } : u));
-          alert(`Usuário atualizado para ${newRole}!`);
+          alert(`Sucesso: Usuário atualizado para ${newRole}!`);
       } catch (error: any) {
           console.error("Erro ao atualizar role:", error);
-          alert("Erro: Você precisa ser ADMIN para fazer isso.");
+          alert(`Falha: ${error.message || "Você precisa ser ADMIN para fazer isso."}`);
       } finally {
           setRoleUpdating(null);
       }
@@ -289,7 +421,7 @@ export const AdminDashboard: React.FC = () => {
                     {connectionStatus === 'connected' ? <Wifi className="w-3 h-3 mr-2" /> : <WifiOff className="w-3 h-3 mr-2" />}
                     {connectionStatus === 'connected' ? 'Online' : 'Offline'}
                 </div>
-                <button onClick={() => setIsUploadModalOpen(true)} className="bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-md font-bold flex items-center shadow-lg shadow-amber-900/20">
+                <button onClick={() => { resetForm(); setIsUploadModalOpen(true); }} className="bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-md font-bold flex items-center shadow-lg shadow-amber-900/20">
                     <Upload className="w-4 h-4 mr-2" /> Enviar Vídeo
                 </button>
             </div>
@@ -367,17 +499,46 @@ export const AdminDashboard: React.FC = () => {
                                 ) : (
                                     stats.recentVideos.map((video: any) => (
                                         <tr key={video.id} className="border-b border-slate-800 hover:bg-slate-800/50 transition-colors">
-                                            <td className="px-6 py-4 font-medium text-white flex items-center gap-3">
-                                                <img src={video.thumbnail_url} className="w-10 h-6 object-cover rounded" alt="" />
-                                                {video.title}
+                                            <td className="px-6 py-4 align-middle">
+                                                <div className="flex items-center gap-3">
+                                                    <img src={video.thumbnail_url} className="w-10 h-6 object-cover rounded flex-shrink-0" alt="" />
+                                                    <div className="font-medium text-white truncate max-w-[200px]">{video.title}</div>
+                                                </div>
                                             </td>
-                                            <td className="px-6 py-4 text-gray-300">{video.category}</td>
-                                            <td className="px-6 py-4 text-gray-400">{video.video_url.includes('http') ? 'Link' : 'Arquivo'}</td>
-                                            <td className="px-6 py-4 text-gray-400 flex items-center gap-2">
-                                                <UserIcon className="w-3 h-3" /> {getUploaderName(video)}
+                                            <td className="px-6 py-4 text-gray-300 align-middle">{video.category}</td>
+                                            <td className="px-6 py-4 text-gray-400 align-middle">{video.video_url.includes('http') ? 'Link' : 'Arquivo'}</td>
+                                            <td className="px-6 py-4 text-gray-400 align-middle">
+                                                <div className="flex items-center gap-2">
+                                                    <UserIcon className="w-3 h-3" /> {getUploaderName(video)}
+                                                </div>
                                             </td>
-                                            <td className="px-6 py-4 text-right">
-                                                <button className="text-gray-400 hover:text-red-400"><Trash2 className="w-4 h-4" /></button>
+                                            <td className="px-6 py-4 text-right align-middle">
+                                                <div className="flex justify-end gap-2">
+                                                    <button 
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.preventDefault();
+                                                            e.stopPropagation();
+                                                            handleEditVideo(video);
+                                                        }}
+                                                        className="inline-flex p-1 text-gray-400 hover:text-blue-400 bg-slate-800 hover:bg-blue-900/20 rounded transition-colors cursor-pointer relative z-10"
+                                                        title="Editar"
+                                                    >
+                                                        <Edit className="w-4 h-4" />
+                                                    </button>
+                                                    <button 
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.preventDefault();
+                                                            e.stopPropagation();
+                                                            confirmDeleteVideo(video.id, video.title);
+                                                        }}
+                                                        className="inline-flex p-1 text-gray-400 hover:text-red-400 bg-slate-800 hover:bg-red-900/20 rounded transition-colors cursor-pointer relative z-10"
+                                                        title="Excluir"
+                                                    >
+                                                        <Trash2 className="w-4 h-4" />
+                                                    </button>
+                                                </div>
                                             </td>
                                         </tr>
                                     ))
@@ -422,14 +583,14 @@ export const AdminDashboard: React.FC = () => {
                         <tbody>
                             {userList.map((u: any) => (
                                 <tr key={u.id} className="border-b border-slate-800 hover:bg-slate-800/50">
-                                    <td className="px-6 py-4 font-medium text-white flex items-center gap-2">
+                                    <td className="px-6 py-4 font-medium text-white flex items-center gap-2 align-middle">
                                         <div className="w-8 h-8 rounded bg-slate-700 flex items-center justify-center font-bold text-gray-300">
                                             {u.email.charAt(0).toUpperCase()}
                                         </div>
                                         {u.id === currentUser.id && <span className="text-xs bg-slate-700 px-2 py-0.5 rounded">Você</span>}
                                     </td>
-                                    <td className="px-6 py-4 text-gray-300">{u.email}</td>
-                                    <td className="px-6 py-4">
+                                    <td className="px-6 py-4 text-gray-300 align-middle">{u.email}</td>
+                                    <td className="px-6 py-4 align-middle">
                                         <span className={`px-2 py-1 rounded-full text-xs border ${
                                             u.role === 'ADMIN' ? 'bg-red-900/30 border-red-600 text-red-400' :
                                             u.role === 'EDITOR' ? 'bg-blue-900/30 border-blue-600 text-blue-400' :
@@ -438,7 +599,7 @@ export const AdminDashboard: React.FC = () => {
                                             {u.role}
                                         </span>
                                     </td>
-                                    <td className="px-6 py-4 text-right">
+                                    <td className="px-6 py-4 text-right align-middle">
                                         {u.role === 'USER' && (
                                             <button 
                                                 onClick={() => handleUpdateRole(u.id, 'EDITOR')}
@@ -468,13 +629,49 @@ export const AdminDashboard: React.FC = () => {
 
       </div>
 
-      {/* UPLOAD MODAL (Mesmo de antes) */}
+      {/* CONFIRM DELETE MODAL */}
+      {videoToDelete && (
+          <div className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-slate-900 w-full max-w-sm rounded-xl border border-slate-700 shadow-2xl p-6 transform scale-100 transition-all">
+                  <div className="flex flex-col items-center text-center mb-6">
+                      <div className="w-12 h-12 rounded-full bg-red-900/30 flex items-center justify-center mb-4">
+                          <Trash2 className="w-6 h-6 text-red-500" />
+                      </div>
+                      <h3 className="text-xl font-bold text-white mb-2">Excluir Vídeo?</h3>
+                      <p className="text-gray-400 text-sm">
+                          Você tem certeza que deseja remover <br/>
+                          <span className="text-white font-medium">"{videoToDelete.title}"</span>?
+                          <br/><br/>
+                          <span className="text-xs text-gray-500">Essa ação não pode ser desfeita.</span>
+                      </p>
+                  </div>
+                  <div className="flex gap-3">
+                      <button 
+                          onClick={() => setVideoToDelete(null)}
+                          className="flex-1 px-4 py-2 rounded-lg bg-slate-800 text-white font-medium hover:bg-slate-700 transition-colors"
+                      >
+                          Cancelar
+                      </button>
+                      <button 
+                          onClick={handleExecuteDelete}
+                          disabled={isDeleting}
+                          className="flex-1 px-4 py-2 rounded-lg bg-red-600 text-white font-medium hover:bg-red-500 transition-colors flex justify-center items-center"
+                      >
+                          {isDeleting ? <Loader className="w-4 h-4 animate-spin" /> : 'Excluir'}
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* UPLOAD/EDIT MODAL */}
       {isUploadModalOpen && (
           <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="bg-slate-900 w-full max-w-2xl rounded-xl border border-slate-700 shadow-2xl flex flex-col max-h-[90vh]">
                   <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-950/50 rounded-t-xl">
                       <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                          <Upload className="w-5 h-5 text-amber-500" /> Adicionar Novo Conteúdo
+                          {editingVideoId ? <Edit className="w-5 h-5 text-amber-500" /> : <Upload className="w-5 h-5 text-amber-500" />} 
+                          {editingVideoId ? 'Editar Vídeo' : 'Adicionar Novo Conteúdo'}
                       </h2>
                       <button onClick={() => setIsUploadModalOpen(false)} className="text-gray-400 hover:text-white"><X className="w-6 h-6" /></button>
                   </div>
@@ -494,6 +691,27 @@ export const AdminDashboard: React.FC = () => {
                                       <option>Filmes</option>
                                   </select>
                               </div>
+                              {/* DURATION & PREMIUM ROW */}
+                              <div>
+                                  <label className="block text-sm font-medium text-gray-400 mb-2">Duração (Manual)</label>
+                                  <input 
+                                      type="text" 
+                                      value={duration} 
+                                      onChange={e => setDuration(e.target.value)} 
+                                      placeholder="ex: 12m 30s"
+                                      className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white" 
+                                  />
+                              </div>
+                              <div className="flex items-end">
+                                  <button
+                                      type="button"
+                                      onClick={() => setIsPremium(!isPremium)}
+                                      className={`w-full py-2 px-4 rounded font-bold border transition-colors flex items-center justify-center gap-2 ${isPremium ? 'bg-amber-600 border-amber-500 text-white' : 'bg-slate-950 border-slate-700 text-gray-400'}`}
+                                  >
+                                      {isPremium ? <Shield className="w-4 h-4" /> : <Shield className="w-4 h-4 opacity-50" />}
+                                      {isPremium ? 'Conteúdo Premium (Pago)' : 'Conteúdo Gratuito'}
+                                  </button>
+                              </div>
                           </div>
                           <div>
                               <label className="block text-sm font-medium text-gray-400 mb-2">Descrição</label>
@@ -507,7 +725,10 @@ export const AdminDashboard: React.FC = () => {
                               {uploadType === 'link' ? (
                                   <input type="url" value={youtubeLink} onChange={handleYoutubeLinkChange} placeholder="https://youtube.com/..." className="w-full bg-slate-950 border border-slate-700 rounded p-3 text-white" />
                               ) : (
-                                  <input type="file" accept="video/mp4" onChange={handleFileChange} className="block w-full text-sm text-gray-400 file:bg-amber-600 file:text-white file:border-0 file:rounded-full file:px-4 file:py-2" />
+                                  <div>
+                                      {editingVideoId && <p className="text-xs text-amber-500 mb-2">Atenção: Selecionar um novo arquivo substituirá o vídeo atual.</p>}
+                                      <input type="file" accept="video/mp4" onChange={handleFileChange} className="block w-full text-sm text-gray-400 file:bg-amber-600 file:text-white file:border-0 file:rounded-full file:px-4 file:py-2" />
+                                  </div>
                               )}
                           </div>
                           <div className="bg-slate-800/30 p-4 rounded-lg border border-slate-700 border-dashed">
@@ -516,13 +737,27 @@ export const AdminDashboard: React.FC = () => {
                                   <button type="button" onClick={generateThumbnail} disabled={isGeneratingThumb} className="text-xs bg-slate-700 px-2 py-1 rounded text-white flex gap-1"><Wand2 className="w-3 h-3"/> Gerar Auto</button>
                               </div>
                               <div className="flex gap-4">
-                                  <input type="file" accept="image/*" onChange={e => { setThumbnailFile(e.target.files?.[0] || null); setGeneratedThumbPreview(null); }} className="flex-1 text-sm text-gray-400 file:bg-slate-700 file:text-white file:border-0 file:rounded-full file:px-4 file:py-2" />
-                                  {generatedThumbPreview && <img src={generatedThumbPreview} className="w-20 h-12 object-cover rounded border border-amber-500" alt="Preview" />}
+                                  <div className="flex-1">
+                                      <input type="file" accept="image/*" onChange={e => { setThumbnailFile(e.target.files?.[0] || null); setGeneratedThumbPreview(null); }} className="block w-full text-sm text-gray-400 file:bg-slate-700 file:text-white file:border-0 file:rounded-full file:px-4 file:py-2" />
+                                      {editingVideoId && !thumbnailFile && !generatedThumbPreview && (
+                                          <p className="text-xs text-gray-500 mt-2">Deixe em branco para manter a capa atual.</p>
+                                      )}
+                                  </div>
+                                  {(generatedThumbPreview) ? (
+                                      <img src={generatedThumbPreview} className="w-20 h-12 object-cover rounded border border-amber-500" alt="Preview" />
+                                  ) : (editingVideoId && existingThumbnailUrl && (
+                                      <div className="flex flex-col items-center">
+                                          <img src={existingThumbnailUrl} className="w-20 h-12 object-cover rounded border border-gray-600 opacity-50" alt="Atual" />
+                                          <span className="text-[10px] text-gray-500">Atual</span>
+                                      </div>
+                                  ))}
                               </div>
                           </div>
                           <div className="flex justify-end gap-3 pt-4">
                               <button type="button" onClick={() => setIsUploadModalOpen(false)} className="px-4 py-2 text-gray-400 hover:text-white">Cancelar</button>
-                              <button type="submit" disabled={uploading} className="bg-amber-600 hover:bg-amber-500 text-white px-6 py-2 rounded font-bold flex items-center">{uploading ? <Loader className="animate-spin"/> : 'Salvar'}</button>
+                              <button type="submit" disabled={uploading} className="bg-amber-600 hover:bg-amber-500 text-white px-6 py-2 rounded font-bold flex items-center">
+                                  {uploading ? <Loader className="animate-spin"/> : (editingVideoId ? 'Atualizar Vídeo' : 'Salvar')}
+                              </button>
                           </div>
                       </form>
                   </div>

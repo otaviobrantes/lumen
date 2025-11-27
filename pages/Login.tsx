@@ -12,6 +12,16 @@ export const Login: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Função auxiliar para traduzir erros do Supabase
+  const translateError = (msg: string) => {
+      if (msg.includes('Email not confirmed')) return 'E-mail não confirmado. Verifique sua caixa de entrada ou contate o suporte.';
+      if (msg.includes('Invalid login credentials')) return 'E-mail ou senha incorretos.';
+      if (msg.includes('User already registered')) return 'Este e-mail já está cadastrado.';
+      if (msg.includes('Password should be at least')) return 'A senha deve ter no mínimo 6 caracteres.';
+      if (msg.includes('fetch')) return 'Erro de conexão. Verifique sua internet ou adblock.';
+      return msg; // Retorna original se não houver tradução
+  };
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -104,7 +114,7 @@ export const Login: React.FC = () => {
         }
 
     } catch (err: any) {
-        setError(err.message || 'Ocorreu um erro na autenticação.');
+        setError(translateError(err.message || 'Ocorreu um erro na autenticação.'));
     } finally {
         setLoading(false);
     }
